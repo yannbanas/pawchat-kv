@@ -91,19 +91,21 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Budget mesure, pas suppose : l'image locale construite avec ce meme
-      # Dockerfile pese 16,4 Mo (alpine:3.20 ~8 Mo + un binaire musl
-      # statique strippe qui embarque axum/tokio/dashmap/redb). Le seuil est
-      # fixe au-dessus de cette mesure, assez serre pour qu'un ajout de
-      # dependance lourde (ou un `ca-certificates` glisse par megarde) le
-      # fasse echouer.
+      # Budget mesure, pas suppose : ce meme job a mesure 10 Mo sur le
+      # premier build reel (alpine:3.20 + un binaire musl statique strippe
+      # qui embarque axum/tokio/dashmap/redb ; un `docker images` local en
+      # annonce 16,4 Mo, l'ecart vient du store containerd de Docker
+      # Desktop — c'est la mesure du runner qui fait foi puisque c'est elle
+      # que ce gate compare). Seuil a 20 Mo : assez de marge pour une
+      # croissance normale, assez serre pour qu'un `ca-certificates` glisse
+      # par megarde ou une dependance lourde le fasse echouer.
       - name: Pull et verifie la taille de l'image
         run: |
           docker pull ghcr.io/mairie-creusot/pawchat-kv:sha-${GITHUB_SHA::12}
           size_bytes=$(docker inspect ghcr.io/mairie-creusot/pawchat-kv:sha-${GITHUB_SHA::12} --format='{{.Size}}')
           size_mb=$((size_bytes / 1024 / 1024))
           echo "Taille de l'image : ${size_mb} Mo"
-          if [ "$size_mb" -gt 30 ]; then
-            echo "::error::Image de ${size_mb} Mo — depasse le budget de 30 Mo fixe pour ce projet."
+          if [ "$size_mb" -gt 20 ]; then
+            echo "::error::Image de ${size_mb} Mo — depasse le budget de 20 Mo fixe pour ce projet."
             exit 1
           fi
