@@ -130,7 +130,10 @@ async fn concurrent_writes_to_persisted_cache_are_all_durable() {
     for user_id in 0..users {
         let cache = Arc::clone(&cache);
         handles.push(tokio::spawn(async move {
-            cache.set_cv(user_id, (user_id % 10) as u32 + 1).await.unwrap();
+            cache
+                .set_cv(user_id, (user_id % 10) as u32 + 1)
+                .await
+                .unwrap();
         }));
     }
     for h in handles {
@@ -141,7 +144,10 @@ async fn concurrent_writes_to_persisted_cache_are_all_durable() {
     let reopened = RevocationCache::open(&path).unwrap();
     assert_eq!(reopened.len(), users as usize);
     for user_id in 0..users {
-        assert_eq!(reopened.get_cv(user_id).await, Some((user_id % 10) as u32 + 1));
+        assert_eq!(
+            reopened.get_cv(user_id).await,
+            Some((user_id % 10) as u32 + 1)
+        );
     }
 }
 

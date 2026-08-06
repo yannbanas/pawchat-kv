@@ -1,0 +1,99 @@
+name: Docker
+
+# Publie ghcr.io/mairie-creusot/pawchat-kv (pawchat-kv-server, voir
+# Dockerfile). Meme patron que le workflow docker.yml de chronotopedb :
+# push sur main touchant le code, ou declenchement manuel.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "Dockerfile"
+      - ".github/workflows/docker.yml"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag supplementaire a publier en plus de latest/sha-*"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: tags
+        run: |
+          tags="ghcr.io/mairie-creusot/pawchat-kv:latest
+          ghcr.io/mairie-creusot/pawchat-kv:sha-${GITHUB_SHA::12}"
+          if [ -n "${{ inputs.tag }}" ]; then
+            tags="$tags
+          ghcr.io/mairie-creusot/pawchat-kv:${{ inputs.tag }}"
+          fi
+          {
+            echo "list<<EOF"
+            echo "$tags"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          tags: ${{ steps.tags.outputs.list }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Voir mairie-creusot/SpacetimeDB PAWCHAT.md pour le piege deja vecu :
+      # un package existant pousse a la main peut avoir une liaison cassee au
+      # depot meme si "Manage Actions access" l'affiche en Admin — dans ce
+      # cas, supprimer le package puis relancer ce workflow le relie
+      # correctement (mais supprime aussi tous ses tags existants).
+      #
+      # Contrairement a chronotopedb, ce package reste PRIVE : pawchat-kv-server
+      # tient un cache de revocation de credentials, il n'y a aucune raison de
+      # publier son image au monde. C'est le defaut de GHCR — rien a faire,
+      # juste ne pas le changer.
+      - name: Rappel visibilite du package
+        run: |
+          echo "::notice::Le package pawchat-kv doit rester Prive (defaut GHCR). Verifie seulement que les hotes qui le tirent ont un token de lecture sur les packages de l'organisation."
+
+  size-check:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      # Budget mesure, pas suppose : l'image locale construite avec ce meme
+      # Dockerfile pese 16,4 Mo (alpine:3.20 ~8 Mo + un binaire musl
+      # statique strippe qui embarque axum/tokio/dashmap/redb). Le seuil est
+      # fixe au-dessus de cette mesure, assez serre pour qu'un ajout de
+      # dependance lourde (ou un `ca-certificates` glisse par megarde) le
+      # fasse echouer.
+      - name: Pull et verifie la taille de l'image
+        run: |
+          docker pull ghcr.io/mairie-creusot/pawchat-kv:sha-${GITHUB_SHA::12}
+          size_bytes=$(docker inspect ghcr.io/mairie-creusot/pawchat-kv:sha-${GITHUB_SHA::12} --format='{{.Size}}')
+          size_mb=$((size_bytes / 1024 / 1024))
+          echo "Taille de l'image : ${size_mb} Mo"
+          if [ "$size_mb" -gt 30 ]; then
+            echo "::error::Image de ${size_mb} Mo — depasse le budget de 30 Mo fixe pour ce projet."
+            exit 1
+          fi

@@ -34,17 +34,23 @@ fn bench_many_keys(c: &mut Criterion) {
 
     let mut group = c.benchmark_group("incr_and_check/many_keys");
     for key_space in [100usize, 10_000] {
-        group.bench_with_input(BenchmarkId::from_parameter(key_space), &key_space, |b, &key_space| {
-            let mut i: u64 = 0;
-            b.to_async(&rt).iter(|| {
-                i = i.wrapping_add(1);
-                let key = format!("bench:{}", i as usize % key_space);
-                let limiter = &limiter;
-                async move {
-                    limiter.incr_and_check(&key, 1_000_000, Duration::from_secs(60)).await
-                }
-            });
-        });
+        group.bench_with_input(
+            BenchmarkId::from_parameter(key_space),
+            &key_space,
+            |b, &key_space| {
+                let mut i: u64 = 0;
+                b.to_async(&rt).iter(|| {
+                    i = i.wrapping_add(1);
+                    let key = format!("bench:{}", i as usize % key_space);
+                    let limiter = &limiter;
+                    async move {
+                        limiter
+                            .incr_and_check(&key, 1_000_000, Duration::from_secs(60))
+                            .await
+                    }
+                });
+            },
+        );
     }
     group.finish();
 }
@@ -80,5 +86,10 @@ fn bench_concurrent_same_key(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, bench_single_key_contended, bench_many_keys, bench_concurrent_same_key);
+criterion_group!(
+    benches,
+    bench_single_key_contended,
+    bench_many_keys,
+    bench_concurrent_same_key
+);
 criterion_main!(benches);

@@ -26,7 +26,7 @@ const TABLE: TableDefinition<u64, Vec<u8>> = TableDefinition::new("credential_ve
 
 /// On-disk record for one user's credential version.
 ///
-/// Serialized with `bincode` and stored as the `redb` value. Kept as a
+/// Serialized with `postcard` and stored as the `redb` value. Kept as a
 /// small struct rather than a bare `u32` so the persisted record carries a
 /// timestamp of when it was last bumped — useful context to have on disk
 /// even though the in-memory hot path only ever needs the version number.
@@ -70,7 +70,10 @@ impl RevocationCache {
     /// Useful for tests, or for an embedding process that is fine relying
     /// entirely on the database as source of truth after every restart.
     pub fn new_in_memory() -> Self {
-        Self { table: ShardedTtlMap::new("revocation_cache", None), db: None }
+        Self {
+            table: ShardedTtlMap::new("revocation_cache", None),
+            db: None,
+        }
     }
 
     /// Opens (creating if absent) a `redb` database file at `path` and
@@ -104,7 +107,7 @@ impl RevocationCache {
             for row in redb_table.iter()? {
                 let (key, value) = row?;
                 let user_id = key.value();
-                let record: CvRecord = bincode::deserialize(&value.value())
+                let record: CvRecord = postcard::from_bytes(&value.value())
                     .map_err(|e| KvError::Serialization(e.to_string()))?;
                 table.insert(user_id, record.version, None);
                 loaded += 1;
@@ -112,7 +115,10 @@ impl RevocationCache {
         }
         tracing::info!(loaded, path = %path.as_ref().display(), "warm-loaded revocation cache from disk");
 
-        Ok(Self { table, db: Some(Arc::new(db)) })
+        Ok(Self {
+            table,
+            db: Some(Arc::new(db)),
+        })
     }
 
     /// Returns the cached credential version for `user_id`, if known.
@@ -149,7 +155,10 @@ impl RevocationCache {
         self.table.insert(user_id, version, None);
 
         if let Some(db) = self.db.clone() {
-            let record = CvRecord { version, updated_at_unix_ms: now_unix_ms() };
+            let record = CvRecord {
+                version,
+                updated_at_unix_ms: now_unix_ms(),
+            };
             tokio::task::spawn_blocking(move || persist(&db, user_id, &record))
                 .await
                 .map_err(|e| KvError::Serialization(format!("persist task panicked: {e}")))??;
@@ -197,7 +206,7 @@ impl RevocationCache {
 }
 
 fn persist(db: &Database, user_id: u64, record: &CvRecord) -> Result<(), KvError> {
-    let bytes = bincode::serialize(record).map_err(|e| KvError::Serialization(e.to_string()))?;
+    let bytes = postcard::to_allocvec(record).map_err(|e| KvError::Serialization(e.to_string()))?;
     let write_txn = db.begin_write()?;
     {
         let mut table = write_txn.open_table(TABLE)?;

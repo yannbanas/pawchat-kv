@@ -3,13 +3,24 @@
 Store clé-valeur Rust embarqué, taillé sur mesure pour deux besoins précis
 de PawChat : le rate-limiting et le cache de révocation de
 `credential_version`. Ce n'est **pas** un Redis-killer généraliste — voir
-`docs/kv-store-research-pawchat-design.md` (§6) pour la recherche complète
-qui a mené à ce choix plutôt que Dragonfly/KeyDB/Garnet/Kvrocks/Redis.
+[`docs/kv-store-research-pawchat-design.md`](https://github.com/mairie-creusot/pawchat/blob/main/docs/kv-store-research-pawchat-design.md)
+(§6, dépôt `mairie-creusot/pawchat`) pour la recherche complète qui a mené à
+ce choix plutôt que Dragonfly/KeyDB/Garnet/Kvrocks/Redis.
 
-C'est une bibliothèque (`crate-type` par défaut, `lib.rs`), pas un service
-réseau : elle est prévue pour être embarquée directement dans le futur
-`pawchat-auth` (`docs/auth-microservice-rust-plan.md`), pas déployée comme
-process séparé.
+## Structure du dépôt
+
+Workspace Cargo à deux crates :
+
+| Crate | Rôle |
+|---|---|
+| `crates/pawchat-kv-core` | La bibliothèque (`RateLimiter`, `RevocationCache`). Nom de lib : `pawchat_kv`. Destinée à être embarquée directement dans le futur `pawchat-auth` (`docs/auth-microservice-rust-plan.md`). |
+| `crates/pawchat-kv-server` | Le binaire « pont Phase 0 » : expose le cœur en HTTP interne minimaliste (`axum`), pour les appelants hors-process. |
+
+Le serveur est exactement ce que le document de conception anticipe au §6.2 :
+« si `pawchat-app` (Next.js) doit y accéder un jour… une API HTTP interne
+minimaliste sur `axum` suffit — pas besoin de reproduire RESP ». Il n'y a
+donc ni protocole RESP, ni clustering, ni exposition publique : c'est un pont
+interne, derrière un secret partagé.
 
 ## Pourquoi construire plutôt qu'adopter
 
@@ -33,7 +44,8 @@ RateLimiter          RevocationCache
        │                     │
        └────────┬────────────┘
                  │
-      ShardedTtlMap<K, V>   (générique, src/table.rs)
+      ShardedTtlMap<K, V>   (générique,
+                             crates/pawchat-kv-core/src/table.rs)
       = DashMap<K, StoredEntry<V>>
         + tâche tokio::spawn de purge active périodique
 ```
@@ -68,7 +80,8 @@ Le document de conception laissait ce choix ouvert (§6.3). Décision : **`DashM
   l'écosystème Rust (`tokio`, `rustc`), sans dépendre d'un scheduler
   d'éviction en tâche de fond supplémentaire à comprendre et déboguer.
 - Le TTL et la purge active sont ici implémentés à la main
-  (`src/table.rs`) : une tâche `tokio::spawn` périodique fait un
+  (`crates/pawchat-kv-core/src/table.rs`) : une tâche `tokio::spawn`
+  périodique fait un
   `retain()` sur la table entière. À l'échelle de PawChat (quelques
   milliers de clés actives), un scan complet périodique est largement
   assez rapide et beaucoup plus simple à auditer qu'une structure
@@ -78,6 +91,18 @@ En résumé : `moka` aurait été un choix défendable pour un cache générique
 `DashMap` + une petite couche TTL maison donne un contrôle total et plus
 simple sur la sémantique exacte (fenêtre glissante exacte, purge active)
 dont ce crate a besoin.
+
+### Sérialisation sur disque : `postcard`, pas `bincode`
+
+Le `CvRecord` persisté dans `redb` est encodé avec `postcard`. `bincode`
+était le choix initial, mais l'intégralité du crate est marquée
+*unmaintained* par RUSTSEC (RUSTSEC-2025-0141, `patched = []` : aucune
+version n'y échappe), ce qui fait échouer le job `cargo audit --deny warnings`
+de la CI. `postcard` est maintenu, `no_std`+`alloc`, pilote serde de la même
+façon, et produit un encodage plus compact — le remplacement tient en deux
+appels (`to_allocvec`/`from_bytes`). Le format sur disque n'est pas
+compatible avec l'ancien, ce qui est sans conséquence : aucun fichier `redb`
+de ce crate n'existe encore en production.
 
 ### Horloge : `tokio::time::Instant`, pas `std::time::Instant`
 
@@ -139,10 +164,85 @@ Chaque structure expose `metrics() -> MetricsSnapshot` (hits, misses,
 writes, purged, taille de table) instrumenté via `tracing` dès le premier
 appel — pas ajouté après coup.
 
+## `pawchat-kv-server` — le pont HTTP interne
+
+Binaire `axum` qui expose le cœur à un appelant hors-process (typiquement
+`pawchat-app`, Next.js). Volontairement minimaliste : quatre routes, JSON
+sur HTTP, un secret partagé statique.
+
+### Variables d'environnement
+
+| Variable | Défaut | Rôle |
+|---|---|---|
+| `PAWCHAT_KV_INTERNAL_SECRET` | *(aucun — obligatoire)* | Secret partagé attendu en `Authorization: Bearer <secret>`. **Le serveur refuse de démarrer** s'il est absent ou vide : pas de mode dev permissif. |
+| `PORT` | `3210` | Port d'écoute (choisi pour ne pas entrer en collision avec `chronotope-server`, qui utilise 3200). |
+| `PAWCHAT_KV_DB_PATH` | `/data/revocation.redb` dans l'image Docker, *(vide)* sinon | Fichier `redb` du `RevocationCache`. Si vide/absent, le cache tourne en mémoire seule (aucune persistance entre redémarrages). |
+| `PAWCHAT_KV_MAX_CONCURRENT_REQUESTS` | `256` | Plafond `tower` `concurrency_limit` ; le surplus est rejeté immédiatement en `503` par `load_shed` plutôt que mis en file. |
+| `RUST_LOG` | `info` | Filtre `tracing-subscriber`. |
+
+### Endpoints
+
+Toutes les routes sauf `/health` exigent l'en-tête
+`Authorization: Bearer $PAWCHAT_KV_INTERNAL_SECRET` (comparaison à temps
+constant via `subtle`), sinon `401` + `WWW-Authenticate: Bearer`.
+
+| Route | Corps de requête | Réponse |
+|---|---|---|
+| `POST /rate-limit/check` | `{"key": string, "limit": u32, "window_secs": u64}` | `{"allowed": bool}` |
+| `GET /revocation/:user_id` | — | `{"version": u32 \| null}` |
+| `POST /revocation/:user_id` | `{"version": u32}` | `{"ok": true}` |
+| `GET /health` | — *(sans authentification)* | `{"ok": true, "service": "pawchat-kv-server"}` |
+
+`version: null` signifie « pas en cache », pas « version 0 » ni « aucune
+restriction » : l'appelant doit alors interroger la base (source de vérité)
+puis réécrire la valeur via `POST /revocation/:user_id`.
+
+`window_secs` est validé à la frontière (`1..=86400`), tout comme une `key`
+vide et un `:user_id` non numérique — rejetés en `400` avant d'atteindre le
+cœur. `/health` est hors des couches de résilience : il répond même quand
+le reste est saturé (c'est ce que sonde le `HEALTHCHECK` Docker).
+
+```bash
+curl -s -X POST http://127.0.0.1:3210/rate-limit/check \
+  -H "authorization: Bearer $PAWCHAT_KV_INTERNAL_SECRET" \
+  -H 'content-type: application/json' \
+  -d '{"key":"login:1.2.3.4","limit":5,"window_secs":60}'
+# {"allowed":true}
+
+curl -s -X POST http://127.0.0.1:3210/revocation/42 \
+  -H "authorization: Bearer $PAWCHAT_KV_INTERNAL_SECRET" \
+  -H 'content-type: application/json' -d '{"version":3}'
+# {"ok":true}
+
+curl -s http://127.0.0.1:3210/revocation/42 \
+  -H "authorization: Bearer $PAWCHAT_KV_INTERNAL_SECRET"
+# {"version":3}
+```
+
+### Docker
+
+Image publiée sur `ghcr.io/mairie-creusot/pawchat-kv` (package **privé** :
+ce service tient un cache de révocation de credentials, il n'a aucune raison
+d'être public). Recette : cross-compile musl statique + `alpine:3.20` +
+utilisateur non-root + `HEALTHCHECK` sur `/health`.
+
+```bash
+docker run -d --name pawchat-kv \
+  -p 3210:3210 \
+  -e PAWCHAT_KV_INTERNAL_SECRET=change-moi \
+  -v pawchat-kv-data:/data \
+  ghcr.io/mairie-creusot/pawchat-kv:latest
+```
+
+Le volume sur `/data` conserve le fichier `redb` de révocation entre deux
+redémarrages ; sans lui, le cache repart froid (correct, mais chaque
+première lecture par utilisateur retombe sur la base).
+
 ## Ce qui est volontairement exclu (§6.5 du document)
 
-- **Protocole réseau RESP/Memcached.** Aucun serveur, aucun parsing de
-  protocole exposé au réseau — c'est une bibliothèque embarquée.
+- **Protocole réseau RESP/Memcached.** `pawchat-kv-server` parle JSON sur
+  HTTP, sur un réseau interne et derrière un secret partagé — aucun parsing
+  de protocole binaire, aucune ambition de compatibilité client Redis.
 - **Clustering / sharding distribué / réplication multi-nœud.** Le cache
   reste local à chaque processus ; si `pawchat-auth` tourne un jour en
   plusieurs répliques, la stratégie de cohérence (dégradation propre par
@@ -194,7 +294,12 @@ prod dans `pawchat-auth`) :
 ## Tests
 
 ```
-cargo test      # 19 tests d'intégration + 2 doctests
-cargo clippy --all-targets -- -D warnings
-cargo bench     # baseline criterion pour incr_and_check
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace --all-targets    # 17 tests cœur + 24 tests serveur
+cargo test --workspace --doc            # 2 doctests
+cargo bench -p pawchat-kv-core          # baseline criterion pour incr_and_check
 ```
+
+Les quatre premières commandes sont exactement ce que fait
+`.github/workflows/ci.yml` ; `cargo audit --deny warnings` s'y ajoute en CI.

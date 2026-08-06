@@ -1,0 +1,29 @@
+[package]
+name = "pawchat-kv-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Binaire pont Phase 0 : expose RateLimiter et RevocationCache de pawchat-kv-core en HTTP interne minimaliste (axum), pour les appelants hors-process comme pawchat-app (Next.js)."
+publish = false
+
+[[bin]]
+name = "pawchat-kv-server"
+path = "src/main.rs"
+
+[dependencies]
+pawchat-kv-core.workspace = true
+axum = "0.7"
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# Comparaison a temps constant du secret partage (voir main.rs::secret_valide) —
+# une seule dependance pure Rust, pas de code natif, meme choix que
+# chronotope-server (ecarte `ring`, qui embarquerait du code C).
+subtle = "2.6"
+# concurrency_limit/load_shed (voir main.rs::router) : deja une dependance
+# transitive d'axum, aucune nouvelle dependance de fond.
+tower = { version = "0.5", features = ["util", "limit", "load-shed"] }

@@ -77,8 +77,14 @@ async fn sliding_window_is_exact_at_the_boundary_not_a_fixed_bucket() {
     // have aged out, while t=20/40/60 (90/70/50ms old) have not. Exactly
     // one slot should have freed up.
     tokio::time::advance(Duration::from_millis(30)).await;
-    assert!(limiter.incr_and_check("k", limit, window).await, "one slot should have freed up");
-    assert!(!limiter.incr_and_check("k", limit, window).await, "no further slot should be free");
+    assert!(
+        limiter.incr_and_check("k", limit, window).await,
+        "one slot should have freed up"
+    );
+    assert!(
+        !limiter.incr_and_check("k", limit, window).await,
+        "no further slot should be free"
+    );
 }
 
 #[tokio::test]

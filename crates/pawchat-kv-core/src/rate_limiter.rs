@@ -71,7 +71,9 @@ impl RateLimiter {
     /// (e.g. one-off IPs that never come back) faster, at the cost of more
     /// frequent full-table scans.
     pub fn with_purge_interval(interval: Duration) -> Self {
-        Self { table: ShardedTtlMap::new("rate_limiter", Some(interval)) }
+        Self {
+            table: ShardedTtlMap::new("rate_limiter", Some(interval)),
+        }
     }
 
     /// Creates a rate limiter with no background purge task. Inactive keys
@@ -79,7 +81,9 @@ impl RateLimiter {
     /// explicitly. Useful outside a Tokio runtime (e.g. `criterion`
     /// benchmarks) or in tests that want deterministic purge timing.
     pub fn without_purge_task() -> Self {
-        Self { table: ShardedTtlMap::new("rate_limiter", None) }
+        Self {
+            table: ShardedTtlMap::new("rate_limiter", None),
+        }
     }
 
     /// Records one attempt against `key` and reports whether it is allowed
@@ -98,7 +102,9 @@ impl RateLimiter {
 
         let allowed = self.table.with_entry(
             key.to_string(),
-            || SlidingWindow { hits: VecDeque::new() },
+            || SlidingWindow {
+                hits: VecDeque::new(),
+            },
             |entry| {
                 let hits = &mut entry.value.hits;
                 while let Some(&front) = hits.front() {

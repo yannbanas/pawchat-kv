@@ -1,0 +1,31 @@
+[package]
+name = "pawchat-kv-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Embedded rate-limiter and credential-version revocation cache for PawChat. Not a general-purpose KV store."
+publish = false
+
+[lib]
+name = "pawchat_kv"
+path = "src/lib.rs"
+
+[dependencies]
+dashmap = "6"
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "macros"] }
+redb = "2"
+serde = { version = "1", features = ["derive"] }
+postcard = { version = "1", default-features = false, features = ["alloc"] }
+tracing = "0.1"
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["async_tokio"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "macros", "test-util"] }
+tempfile = "3"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[[bench]]
+name = "rate_limiter_bench"
+harness = false

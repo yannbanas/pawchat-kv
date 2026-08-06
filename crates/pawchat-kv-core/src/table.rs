@@ -17,8 +17,8 @@ use std::hash::Hash;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::time::Instant;
 use tokio::task::JoinHandle;
+use tokio::time::Instant;
 
 use crate::metrics::{Metrics, MetricsSnapshot};
 
@@ -69,8 +69,8 @@ where
         let metrics = Arc::new(Metrics::default());
         let stopped = Arc::new(AtomicBool::new(false));
 
-        let purge_task = purge_interval.and_then(|interval| {
-            match tokio::runtime::Handle::try_current() {
+        let purge_task =
+            purge_interval.and_then(|interval| match tokio::runtime::Handle::try_current() {
                 Ok(handle) => {
                     let map = Arc::clone(&inner);
                     let m = Arc::clone(&metrics);
@@ -85,10 +85,15 @@ where
                     );
                     None
                 }
-            }
-        });
+            });
 
-        Self { name, inner, metrics, purge_task, stopped }
+        Self {
+            name,
+            inner,
+            metrics,
+            purge_task,
+            stopped,
+        }
     }
 
     /// Atomically gets-or-inserts the entry for `key`, then applies `f` to
@@ -177,7 +182,6 @@ where
     pub(crate) fn record_miss(&self) {
         self.metrics.record_miss();
     }
-
 }
 
 impl<K, V> Drop for ShardedTtlMap<K, V>
@@ -207,7 +211,12 @@ where
     let removed = before.saturating_sub(map.len());
     if removed > 0 {
         metrics.record_purged(removed as u64);
-        tracing::debug!(table = name, removed, remaining = map.len(), "purged expired entries");
+        tracing::debug!(
+            table = name,
+            removed,
+            remaining = map.len(),
+            "purged expired entries"
+        );
     }
     removed
 }
