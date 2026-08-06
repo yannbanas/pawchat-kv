@@ -81,6 +81,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      # Login obligatoire ici, contrairement a chronotopedb : ce package
+      # reste Prive, donc le `docker pull` anonyme echoue en `unauthorized`
+      # (constate en conditions reelles sur le premier run de ce workflow).
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       # Budget mesure, pas suppose : l'image locale construite avec ce meme
       # Dockerfile pese 16,4 Mo (alpine:3.20 ~8 Mo + un binaire musl
       # statique strippe qui embarque axum/tokio/dashmap/redb). Le seuil est
