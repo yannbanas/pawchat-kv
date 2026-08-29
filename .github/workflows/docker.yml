@@ -1,6 +1,6 @@
 name: Docker
 
-# Publie ghcr.io/mairie-creusot/pawchat-kv (pawchat-kv-server, voir
+# Publie ghcr.io/${{ github.repository_owner }}/pawchat-kv (pawchat-kv-server, voir
 # Dockerfile). Meme patron que le workflow docker.yml de chronotopedb :
 # push sur main touchant le code, ou declenchement manuel.
 
@@ -41,11 +41,11 @@ jobs:
 
       - id: tags
         run: |
-          tags="ghcr.io/mairie-creusot/pawchat-kv:latest
-          ghcr.io/mairie-creusot/pawchat-kv:sha-${GITHUB_SHA::12}"
+          tags="ghcr.io/${{ github.repository_owner }}/pawchat-kv:latest
+          ghcr.io/${{ github.repository_owner }}/pawchat-kv:sha-${GITHUB_SHA::12}"
           if [ -n "${{ inputs.tag }}" ]; then
             tags="$tags
-          ghcr.io/mairie-creusot/pawchat-kv:${{ inputs.tag }}"
+          ghcr.io/${{ github.repository_owner }}/pawchat-kv:${{ inputs.tag }}"
           fi
           {
             echo "list<<EOF"
@@ -62,7 +62,7 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # Voir mairie-creusot/SpacetimeDB PAWCHAT.md pour le piege deja vecu :
+      # Voir yannbanas/SpacetimeDB PAWCHAT.md pour le piege deja vecu :
       # un package existant pousse a la main peut avoir une liaison cassee au
       # depot meme si "Manage Actions access" l'affiche en Admin — dans ce
       # cas, supprimer le package puis relancer ce workflow le relie
@@ -101,8 +101,8 @@ jobs:
       # par megarde ou une dependance lourde le fasse echouer.
       - name: Pull et verifie la taille de l'image
         run: |
-          docker pull ghcr.io/mairie-creusot/pawchat-kv:sha-${GITHUB_SHA::12}
-          size_bytes=$(docker inspect ghcr.io/mairie-creusot/pawchat-kv:sha-${GITHUB_SHA::12} --format='{{.Size}}')
+          docker pull ghcr.io/${{ github.repository_owner }}/pawchat-kv:sha-${GITHUB_SHA::12}
+          size_bytes=$(docker inspect ghcr.io/${{ github.repository_owner }}/pawchat-kv:sha-${GITHUB_SHA::12} --format='{{.Size}}')
           size_mb=$((size_bytes / 1024 / 1024))
           echo "Taille de l'image : ${size_mb} Mo"
           if [ "$size_mb" -gt 20 ]; then
